@@ -1,9 +1,8 @@
 /*******************************************************************************
 * Title: Reflow Oven Controller
-* Version: 1.20
-* Date: 26-11-2012
-* Company: Rocket Scream Electronics
-* Author: Lim Phang Moh
+* Version: 1.9
+* Date: 29-01-2015
+* Author: Mark Fink
 * Website: www.rocketscream.com
 * 
 * Brief
@@ -11,47 +10,29 @@
 * This is an example firmware for our Arduino compatible reflow oven controller. 
 * The reflow curve used in this firmware is meant for lead-free profile 
 * (it's even easier for leaded process!). You'll need to use the MAX31855 
-* library for Arduino if you are having a shield of v1.60 & above which can be 
-* downloaded from our GitHub repository. Please check our wiki 
-* (www.rocketscream.com/wiki) for more information on using this piece of code 
-* together with the reflow oven controller shield. 
+* library for Arduino if you are having a shield of v1.68.
 *
-* Temperature (Degree Celcius)                 Magic Happens Here!
-* 245-|                                               x  x  
-*     |                                            x        x
-*     |                                         x              x
-*     |                                      x                    x
-* 200-|                                   x                          x
-*     |                              x    |                          |   x   
-*     |                         x         |                          |       x
-*     |                    x              |                          |
-* 150-|               x                   |                          |
-*     |             x |                   |                          |
-*     |           x   |                   |                          | 
-*     |         x     |                   |                          | 
-*     |       x       |                   |                          | 
-*     |     x         |                   |                          |
-*     |   x           |                   |                          |
-* 30 -| x             |                   |                          |
-*     |<  60 - 90 s  >|<    90 - 120 s   >|<       90 - 120 s       >|
-*     | Preheat Stage |   Soaking Stage   |       Reflow Stage       | Cool
-*  0  |_ _ _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+* Temperature (Degree Celcius)                   Magic Happens Here!
+* 245-|                                                   
+*     |                         Liquidus + 20°C   x|x x x x x x x|x
+*     |                                          x |             |  x
+*     |                                         x  |             |    x
+* 200-|                                        x   |             |      x
+*     |                                   |   x    |             |        x   
+*     |                                   |  x     |             |          x
+*     |                                   | x      |             |
+* 150-|               x  x  x  x  x  x  x x        |             |
+*     |             x |                   |        |             |
+*     |           x   |                   |        |             | 
+*     |         x     |                   |        |             | 
+*     |       x       |                   |        |             | 
+*     |     x         |                   |        |             |
+*     |   x           |                   |        |             |
+* 30 -| x             |                   |        |             |
+*     |    <3°C/sec   |<    60 - 120 sec >|<3°C/sec|< 30-60 sec >|
+*     |    Preheat    |        Soak       | Reflow |     Peak    | Cool
+*  0  |_ _ _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _|_ _ _ _ |_ _ _ _ _ _ _| _ _ _ _ _ _ _ 
 *                                                                Time (Seconds)
-*
-* This firmware owed very much on the works of other talented individuals as
-* follows:
-* ==========================================
-* Brett Beauregard (www.brettbeauregard.com)
-* ==========================================
-* Author of Arduino PID library. On top of providing industry standard PID 
-* implementation, he gave a lot of help in making this reflow oven controller 
-* possible using his awesome library.
-*
-* ==========================================
-* Limor Fried of Adafruit (www.adafruit.com)
-* ==========================================
-* Author of Arduino MAX6675 library. Adafruit has been the source of tonnes of
-* tutorials, examples, and libraries for everyone to learn.
 *
 * Disclaimer
 * ==========
@@ -71,66 +52,61 @@
 *
 * Required Libraries
 * ==================
-* - Arduino PID Library: 
-*   >> https://github.com/br3ttb/Arduino-PID-Library
 * - MAX31855 Library (for board v1.60 & above): 
 *   >> https://github.com/rocketscream/MAX31855
-* - MAX6675 Library (for board v1.50 & below):
-*   >> https://github.com/adafruit/MAX6675-library
 *
 * Revision  Description
 * ========  ===========
-* 1.20			Adds supports for v1.60 (and above) of Reflow Oven Controller 
-*           Shield:
-*					  - Uses MAX31855KASA+ chip and pin reassign (allowing A4 & A5 (I2C)
-*             to be used for user application).
-*					  - Uses analog based switch (allowing D2 & D3 to be used for user 
-*						  application).	
-*						Adds waiting state when temperature too hot to start reflow process.
-*						Corrected thermocouple disconnect error interpretation (MAX6675).
-* 1.10      Arduino IDE 1.0 compatible.
-* 1.00      Initial public release.
-*******************************************************************************/
-// Comment either one the following #define to select your board revision
-// Newer board version starts from v1.60 using MAX31855KASA+ chip 
-#define  USE_MAX31855
-// Older board version below version v1.60 using MAX6675ISA+ chip
-//#define USE_MAX6675
+* 1.9       removed PID controller plus a conservative rampup for v 1.80 reflow board
+* *******************************************************************************/
 
 // ***** INCLUDES *****
 #include <LiquidCrystal.h>
-#ifdef	USE_MAX31855
-	#include <MAX31855.h>
-#else
-	#include <max6675.h>
-#endif
-#include <PID_v1.h>
+// Newer board version starts from v1.60 using MAX31855KASA+ chip 
+#include <MAX31855.h>
 
 // ***** TYPE DEFINITIONS *****
-typedef enum REFLOW_STATE
+typedef enum REFLOW_PHASE
 {
-  REFLOW_STATE_IDLE,
-  REFLOW_STATE_PREHEAT,
-  REFLOW_STATE_SOAK,
-  REFLOW_STATE_REFLOW,
-  REFLOW_STATE_COOL,
-  REFLOW_STATE_COMPLETE,
-	REFLOW_STATE_TOO_HOT,
-  REFLOW_STATE_ERROR
-} reflowState_t;
+  REFLOW_PHASE_IDLE,
+  REFLOW_PHASE_PREHEAT,
+  REFLOW_PHASE_SOAK,
+  REFLOW_PHASE_REFLOW,
+  REFLOW_PHASE_PEAK,
+  REFLOW_PHASE_COOL,
+  REFLOW_PHASE_COMPLETE,
+  REFLOW_PHASE_TOO_HOT,
+  REFLOW_PHASE_ERROR
+} reflowPhase_t;
 
-typedef enum REFLOW_STATUS
-{
-  REFLOW_STATUS_OFF,
-  REFLOW_STATUS_ON
-} reflowStatus_t;
+// ***** LCD MESSAGES *****
+const char* lcdMessagesReflowPhase[] = {
+  "Ready",
+  "Preheat",
+  "Soak",
+  "Reflow",
+  "Peak",
+  "Cool",
+  "Complete",
+  "Wait,hot",
+  "Error"
+};
 
-typedef	enum SWITCH
+// ***** DEGREE SYMBOL FOR LCD *****
+unsigned char degree[8]  = {140,146,146,140,128,128,128,128};
+
+typedef enum OVEN_STATUS
 {
-	SWITCH_NONE,
-	SWITCH_1,	
-	SWITCH_2
-}	switch_t;
+  OVEN_OFF,
+  OVEN_ON
+} ovenStatus_t;
+
+typedef enum BUTTON
+{
+  BUTTON_NONE,
+  BUTTON_1, 
+  BUTTON_2
+} button_t;
 
 typedef enum DEBOUNCE_STATE
 {
@@ -140,118 +116,57 @@ typedef enum DEBOUNCE_STATE
 } debounceState_t;
 
 // ***** CONSTANTS *****
-#define TEMPERATURE_ROOM 50
-#define TEMPERATURE_SOAK_MIN 150
-#define TEMPERATURE_SOAK_MAX 200
-#define TEMPERATURE_REFLOW_MAX 250
-#define TEMPERATURE_COOL_MIN 100
-#define SENSOR_SAMPLING_TIME 1000
-#define SOAK_TEMPERATURE_STEP 5
-#define SOAK_MICRO_PERIOD 9000
+#define RAMPUP 3.0
+#define ROOM_TEMPERATURE 50
+#define SOAK_TEMPERATURE 150
+#define SOAK_PERIOD 90000
+#define PEAK_TEMPERATURE 237
+#define PEAK_PERIOD 50000
+#define COOL_TEMPERATURE 100
+
+#define READ_INTERVAL_TIME 200
+#define DISPLAY_INTERVAL_TIME 1000
 #define DEBOUNCE_PERIOD_MIN 50
 
-// ***** PID PARAMETERS *****
-// ***** PRE-HEAT STAGE *****
-#define PID_KP_PREHEAT 100
-#define PID_KI_PREHEAT 0.025
-#define PID_KD_PREHEAT 20
-// ***** SOAKING STAGE *****
-#define PID_KP_SOAK 300
-#define PID_KI_SOAK 0.05
-#define PID_KD_SOAK 250
-// ***** REFLOW STAGE *****
-#define PID_KP_REFLOW 300
-#define PID_KI_REFLOW 0.05
-#define PID_KD_REFLOW 350
-#define PID_SAMPLE_TIME 1000
-
-// ***** LCD MESSAGES *****
-const char* lcdMessagesReflowStatus[] = {
-  "Ready",
-  "Pre-heat",
-  "Soak",
-  "Reflow",
-  "Cool",
-  "Complete",
-	"Wait,hot",
-  "Error"
-};
-
-// ***** DEGREE SYMBOL FOR LCD *****
-unsigned char degree[8]  = {
-  140,146,146,140,128,128,128,128};
-
 // ***** PIN ASSIGNMENT *****
-#ifdef	USE_MAX31855
-	int ssrPin = 5;
-	int thermocoupleSOPin = A3;
-	int thermocoupleCSPin = A2;
-	int thermocoupleCLKPin = A1;
-	int lcdRsPin = 7;
-	int lcdEPin = 8;
-	int lcdD4Pin = 9;
-	int lcdD5Pin = 10;
-	int lcdD6Pin = 11;
-	int lcdD7Pin = 12;
-	int ledRedPin = 4;
-	int buzzerPin = 6;
-	int switchPin = A0;
-#else
-	int ssrPin = 5;
-	int thermocoupleSOPin = A5;
-	int thermocoupleCSPin = A4;
-	int thermocoupleCLKPin = A3;
-	int lcdRsPin = 7;
-	int lcdEPin = 8;
-	int lcdD4Pin = 9;
-	int lcdD5Pin = 10;
-	int lcdD6Pin = 11;
-	int lcdD7Pin = 12;
-	int ledRedPin = A1;
-	int ledGreenPin = A0;
-	int buzzerPin = 6;
-	int switch1Pin = 2;
-	int switch2Pin = 3;
-#endif
+int ssrPin = 5;
+int thermocoupleSOPin = A3;
+int thermocoupleCSPin = A2;
+int thermocoupleCLKPin = A1;
+int lcdRsPin = 7;
+int lcdEPin = 8;
+int lcdD4Pin = 9;
+int lcdD5Pin = 10;
+int lcdD6Pin = 11;
+int lcdD7Pin = 12;
+int ledRedPin = 4;
+int buzzerPin = 6;
+int buttonPin = A0;
 
-// ***** PID CONTROL VARIABLES *****
-double setpoint;
-double input;
-double output;
-double kp = PID_KP_PREHEAT;
-double ki = PID_KI_PREHEAT;
-double kd = PID_KD_PREHEAT;
-int windowSize;
-unsigned long windowStartTime;
-unsigned long nextCheck;
+//unsigned long nextCheck;
 unsigned long nextRead;
-unsigned long timerSoak;
-unsigned long buzzerPeriod;
-// Reflow oven controller state machine state variable
-reflowState_t reflowState;
-// Reflow oven controller status
-reflowStatus_t reflowStatus;
-// Switch debounce state machine state variable
-debounceState_t debounceState;
-// Switch debounce timer
-long lastDebounceTime;
-// Switch press status
-switch_t switchStatus;
-// Seconds timer
-int timerSeconds;
+unsigned long nextDisplay;
 
-// Specify PID control interface
-PID reflowOvenPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
+unsigned long phaseStartTime;
+double temp;
+double phaseStartTemp;
+
+unsigned long buzzerPeriod;
+
+reflowPhase_t reflowPhase;  // Reflow controller state machine variable
+ovenStatus_t ovenStatus;    // Reflow oven status
+
+debounceState_t debounceState; // BUTTON debounce state
+long lastDebounceTime; // BUTTON debounce timer
+button_t buttonStatus; // BUTTON press status
+int timerSeconds;      // in seconds
+
 // Specify LCD interface
 LiquidCrystal lcd(lcdRsPin, lcdEPin, lcdD4Pin, lcdD5Pin, lcdD6Pin, lcdD7Pin);
-// Specify MAX6675 thermocouple interface
-#ifdef	USE_MAX31855
-	MAX31855 thermocouple(thermocoupleSOPin, thermocoupleCSPin, 
-												thermocoupleCLKPin);
-#else
-	MAX6675 thermocouple(thermocoupleCLKPin, thermocoupleCSPin, 
-											 thermocoupleSOPin);
-#endif
+// Specify thermocouple interface
+MAX31855 thermocouple(thermocoupleSOPin, thermocoupleCSPin, 
+                      thermocoupleCLKPin);
+
 
 void setup()
 {
@@ -266,14 +181,6 @@ void setup()
   // LED pins initialization and turn on upon start-up (active low)
   digitalWrite(ledRedPin, LOW);
   pinMode(ledRedPin, OUTPUT);
-	#ifdef USE_MAX6675
-    // LED pins initialization and turn on upon start-up (active low)
-    digitalWrite(ledGreenPin, LOW);	
-		pinMode(ledGreenPin, OUTPUT);
-		// Switch pins initialization
-		pinMode(switch1Pin, INPUT);
-		pinMode(switch2Pin, INPUT);
-	#endif	
 
   // Start-up splash
   digitalWrite(buzzerPin, HIGH);
@@ -282,7 +189,7 @@ void setup()
   lcd.clear();
   lcd.print("Reflow");
   lcd.setCursor(0, 1);
-  lcd.print("Oven 1.2");
+  lcd.print("Oven 1.9");
   digitalWrite(buzzerPin, LOW);
   delay(2500);
   lcd.clear();
@@ -292,83 +199,50 @@ void setup()
 
   // Turn off LED (active low)
   digitalWrite(ledRedPin, HIGH);
-	#ifdef  USE_MAX6675
-		digitalWrite(ledGreenPin, HIGH);
-	#endif
-  // Set window size
-  windowSize = 2000;
-  // Initialize time keeping variable
-  nextCheck = millis();
-  // Initialize thermocouple reading variable
   nextRead = millis();
+  nextDisplay = millis();
 }
+
 
 void loop()
 {
-  // Current time
-  unsigned long now;
-
-  // Time to read thermocouple?
+  // necessary to read the thermocouple?
   if (millis() > nextRead)
   {
     // Read thermocouple next sampling period
-    nextRead += SENSOR_SAMPLING_TIME;
+    nextRead += READ_INTERVAL_TIME;
     // Read current temperature
-		#ifdef	USE_MAX31855
-			input = thermocouple.readThermocouple(CELSIUS);
-		#else
-			input = thermocouple.readCelsius();
-		#endif
-		
+    temp = thermocouple.readThermocouple(CELSIUS);
+    
     // If thermocouple problem detected
-		#ifdef	USE_MAX6675
-			if (isnan(input))
-		#else
-			if((input == FAULT_OPEN) || (input == FAULT_SHORT_GND) || 
-				 (input == FAULT_SHORT_VCC))
-    #endif
-		{
+    if((temp == FAULT_OPEN) || (temp == FAULT_SHORT_GND) || 
+       (temp == FAULT_SHORT_VCC))
+    {
       // Illegal operation
-      reflowState = REFLOW_STATE_ERROR;
-      reflowStatus = REFLOW_STATUS_OFF;
+      reflowPhase = REFLOW_PHASE_ERROR;
+      ovenStatus = OVEN_OFF;
     }
   }
-
-  if (millis() > nextCheck)
+  
+  if (millis() > nextDisplay)
   {
-    // Check input in the next seconds
-    nextCheck += 1000;
+    // Check temp in the next seconds
+    nextDisplay += DISPLAY_INTERVAL_TIME;
     // If reflow process is on going
-    if (reflowStatus == REFLOW_STATUS_ON)
+    if (ovenStatus == OVEN_ON)
     {
-      // Toggle red LED as system heart beat
-      digitalWrite(ledRedPin, !(digitalRead(ledRedPin)));
-      // Increase seconds timer for reflow curve analysis
-      timerSeconds++;
-      // Send temperature and time stamp to serial 
-      Serial.print(timerSeconds);
-      Serial.print(" ");
-      Serial.print(setpoint);
-      Serial.print(" ");
-      Serial.print(input);
-      Serial.print(" ");
-      Serial.println(output);
-    }
-    else
-    {
-      // Turn off red LED
-      digitalWrite(ledRedPin, HIGH);
+      Serial.println(temp);
     }
 
     // Clear LCD
     lcd.clear();
     // Print current system state
-    lcd.print(lcdMessagesReflowStatus[reflowState]);
+    lcd.print(lcdMessagesReflowPhase[reflowPhase]);
     // Move the cursor to the 2 line
     lcd.setCursor(0, 1);
 
     // If currently in error state
-    if (reflowState == REFLOW_STATE_ERROR)
+    if (reflowPhase == REFLOW_PHASE_ERROR)
     {
       // No thermocouple wire connected
       lcd.print("TC Error!");
@@ -376,252 +250,252 @@ void loop()
     else
     {
       // Print current temperature
-      lcd.print(input);
+      lcd.print(temp);
 
-			#if ARDUINO >= 100
-				// Print degree Celsius symbol
-				lcd.write((uint8_t)0);
-			#else
-				// Print degree Celsius symbol
-				lcd.print(0, BYTE);
-			#endif
+      #if ARDUINO >= 100
+        // Print degree Celsius symbol
+        lcd.write((uint8_t)0);
+      #else
+        // Print degree Celsius symbol
+        lcd.print(0, BYTE);
+      #endif
       lcd.print("C ");
     }
-  }
+  }  // end nextDisplay
 
   // Reflow oven controller state machine
-  switch (reflowState)
+  switch (reflowPhase)
   {
-  case REFLOW_STATE_IDLE:
-		// If oven temperature is still above room temperature
-		if (input >= TEMPERATURE_ROOM)
-		{
-			reflowState = REFLOW_STATE_TOO_HOT;
-		}
-		else
-		{
-			// If switch is pressed to start reflow process
-			if (switchStatus == SWITCH_1)
-			{
-        // Send header for CSV file
-        Serial.println("Time Setpoint Input Output");
-        // Intialize seconds timer for serial debug information
-        timerSeconds = 0;
-        // Initialize PID control window starting time
-        windowStartTime = millis();
-        // Ramp up to minimum soaking temperature
-        setpoint = TEMPERATURE_SOAK_MIN;
-        // Tell the PID to range between 0 and the full window size
-        reflowOvenPID.SetOutputLimits(0, windowSize);
-        reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
-        // Turn the PID on
-        reflowOvenPID.SetMode(AUTOMATIC);
-        // Proceed to preheat stage
-        reflowState = REFLOW_STATE_PREHEAT;
+  case REFLOW_PHASE_IDLE:
+    ovenStatus = OVEN_OFF;
+    // If oven temperature is above room temperature
+    if (temp >= ROOM_TEMPERATURE)
+    {
+      reflowPhase = REFLOW_PHASE_TOO_HOT;
+    }
+    else
+    {
+      // If BUTTON is pressed to start reflow process
+      if (buttonStatus == BUTTON_1)
+      {
+        Serial.println("temp");
+        reflowPhase = REFLOW_PHASE_PREHEAT;
+        phaseStartTime = millis();
+        phaseStartTemp = temp;
       }
     }
     break;
 
-  case REFLOW_STATE_PREHEAT:
-    reflowStatus = REFLOW_STATUS_ON;
-    // If minimum soak temperature is achieve       
-    if (input >= TEMPERATURE_SOAK_MIN)
+  case REFLOW_PHASE_PREHEAT:
+    ovenStatus = OVEN_ON;
+    // If minimum soak temperature is achieved      
+    if (temp >= SOAK_TEMPERATURE)
     {
-      // Chop soaking period into smaller sub-period
-      timerSoak = millis() + SOAK_MICRO_PERIOD;
-      // Set less agressive PID parameters for soaking ramp
-      reflowOvenPID.SetTunings(PID_KP_SOAK, PID_KI_SOAK, PID_KD_SOAK);
-      // Ramp up to first section of soaking temperature
-      setpoint = TEMPERATURE_SOAK_MIN + SOAK_TEMPERATURE_STEP;   
       // Proceed to soaking state
-      reflowState = REFLOW_STATE_SOAK; 
+      phaseStartTime = millis();
+      phaseStartTemp = temp;
+      reflowPhase = REFLOW_PHASE_SOAK; 
+    }
+    else
+    {
+      if ((temp - phaseStartTemp) < ((float)(millis() - phaseStartTime) * RAMPUP / 1000.0))
+      {
+        // temp is lower than max rampup
+        digitalWrite(ssrPin, HIGH); 
+      }
+      else
+      {
+        digitalWrite(ssrPin, LOW); 
+      }
     }
     break;
 
-  case REFLOW_STATE_SOAK:     
+  case REFLOW_PHASE_SOAK:     
+    ovenStatus = OVEN_ON;
     // If micro soak temperature is achieved       
-    if (millis() > timerSoak)
+    if (millis() > phaseStartTime + SOAK_PERIOD)
     {
-      timerSoak = millis() + SOAK_MICRO_PERIOD;
-      // Increment micro setpoint
-      setpoint += SOAK_TEMPERATURE_STEP;
-      if (setpoint > TEMPERATURE_SOAK_MAX)
+      phaseStartTime = millis();
+      phaseStartTemp = temp;
+      reflowPhase = REFLOW_PHASE_REFLOW;
+    }
+    else
+    {
+      if (temp < SOAK_TEMPERATURE)
       {
-        // Set agressive PID parameters for reflow ramp
-        reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
-        // Ramp up to first section of soaking temperature
-        setpoint = TEMPERATURE_REFLOW_MAX;   
-        // Proceed to reflowing state
-        reflowState = REFLOW_STATE_REFLOW; 
+        digitalWrite(ssrPin, HIGH); 
+      }
+      else
+      {
+        digitalWrite(ssrPin, LOW); 
+      }
+    }
+    break;
+
+  case REFLOW_PHASE_REFLOW:
+    ovenStatus = OVEN_ON;
+    // If minimum peak temperature is achieved      
+    if (temp >= PEAK_TEMPERATURE)
+    {
+      // Proceed to peak phase
+      phaseStartTime = millis();
+      phaseStartTemp = temp;
+      reflowPhase = REFLOW_PHASE_PEAK; 
+    }
+    else
+    {
+      if ((temp - phaseStartTemp) < ((float)(millis() - phaseStartTime) * RAMPUP / 1000.0))
+      {
+        // temp is lower than max rampup
+        digitalWrite(ssrPin, HIGH); 
+      }
+      else
+      {
+        digitalWrite(ssrPin, LOW); 
+      }
+    }
+    break;
+
+  case REFLOW_PHASE_PEAK:     
+    ovenStatus = OVEN_ON;
+    if (millis() > phaseStartTime + PEAK_PERIOD)
+    {
+      digitalWrite(ssrPin, LOW); // switch off oven
+      ovenStatus = OVEN_OFF;                
+      phaseStartTime = millis();
+      phaseStartTemp = temp;
+      reflowPhase = REFLOW_PHASE_COOL;
+    }
+    else
+    {
+      if (temp < PEAK_TEMPERATURE)
+      {
+        digitalWrite(ssrPin, HIGH); 
+      }
+      else
+      {
+        digitalWrite(ssrPin, LOW); 
       }
     }
     break; 
 
-  case REFLOW_STATE_REFLOW:
-    // We need to avoid hovering at peak temperature for too long
-    // Crude method that works like a charm and safe for the components
-    if (input >= (TEMPERATURE_REFLOW_MAX - 5))
-    {
-      // Set PID parameters for cooling ramp
-      reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
-      // Ramp down to minimum cooling temperature
-      setpoint = TEMPERATURE_COOL_MIN;   
-      // Proceed to cooling state
-      reflowState = REFLOW_STATE_COOL; 
-    }
-    break;   
-
-  case REFLOW_STATE_COOL:
+  case REFLOW_PHASE_COOL:
+    ovenStatus = OVEN_OFF;                
     // If minimum cool temperature is achieve       
-    if (input <= TEMPERATURE_COOL_MIN)
+    if (temp <= COOL_TEMPERATURE)
     {
       // Retrieve current time for buzzer usage
       buzzerPeriod = millis() + 1000;
-      // Turn on buzzer and green LED to indicate completion
-			#ifdef	USE_MAX6675
-				digitalWrite(ledGreenPin, LOW);
-      #endif
-			digitalWrite(buzzerPin, HIGH);
-      // Turn off reflow process
-      reflowStatus = REFLOW_STATUS_OFF;                
+      // Turn on buzzer to indicate completion
+      digitalWrite(buzzerPin, HIGH);
       // Proceed to reflow Completion state
-      reflowState = REFLOW_STATE_COMPLETE; 
+      reflowPhase = REFLOW_PHASE_COMPLETE; 
     }         
     break;    
 
-  case REFLOW_STATE_COMPLETE:
+  case REFLOW_PHASE_COMPLETE:
+    ovenStatus = OVEN_OFF;                
     if (millis() > buzzerPeriod)
     {
       // Turn off buzzer and green LED
       digitalWrite(buzzerPin, LOW);
-			#ifdef	USE_MAX6675
-				digitalWrite(ledGreenPin, HIGH);
-			#endif
-			// Reflow process ended
-      reflowState = REFLOW_STATE_IDLE; 
+      // Reflow process ended
+      reflowPhase = REFLOW_PHASE_IDLE; 
     }
     break;
-	
-	case REFLOW_STATE_TOO_HOT:
-		// If oven temperature drops below room temperature
-		if (input < TEMPERATURE_ROOM)
-		{
-			// Ready to reflow
-			reflowState = REFLOW_STATE_IDLE;
-		}
-		break;
-		
-  case REFLOW_STATE_ERROR:
+  
+  case REFLOW_PHASE_TOO_HOT:
+    ovenStatus = OVEN_OFF;                
+    // If oven temperature drops below room temperature
+    if (temp < ROOM_TEMPERATURE)
+    {
+      // Ready to reflow
+      reflowPhase = REFLOW_PHASE_IDLE;
+    }
+    break;
+    
+  case REFLOW_PHASE_ERROR:
+    ovenStatus = OVEN_OFF;                
     // If thermocouple problem is still present
-		#ifdef	USE_MAX6675
-			if (isnan(input))
-		#else
-			if((input == FAULT_OPEN) || (input == FAULT_SHORT_GND) || 
-				 (input == FAULT_SHORT_VCC))
-    #endif
+    if((temp == FAULT_OPEN) || (temp == FAULT_SHORT_GND) || 
+       (temp == FAULT_SHORT_VCC))
     {
       // Wait until thermocouple wire is connected
-      reflowState = REFLOW_STATE_ERROR; 
+      reflowPhase = REFLOW_PHASE_ERROR; 
     }
     else
     {
       // Clear to perform reflow process
-      reflowState = REFLOW_STATE_IDLE; 
+      reflowPhase = REFLOW_PHASE_IDLE; 
     }
     break;    
-  }    
+  } // end switch
 
-  // If switch 1 is pressed
-  if (switchStatus == SWITCH_1)
+  // If BUTTON 1 is pressed
+  if (buttonStatus == BUTTON_1)
   {
     // If currently reflow process is on going
-    if (reflowStatus == REFLOW_STATUS_ON)
+    if (ovenStatus == OVEN_ON)
     {
       // Button press is for cancelling
       // Turn off reflow process
-      reflowStatus = REFLOW_STATUS_OFF;
+      ovenStatus = OVEN_OFF;
+      digitalWrite(ssrPin, LOW);   
       // Reinitialize state machine
-      reflowState = REFLOW_STATE_IDLE;
+      reflowPhase = REFLOW_PHASE_IDLE;
     }
   } 
 
-  // Simple switch debounce state machine (for switch #1 (both analog & digital
-	// switch supported))
+  // Simple BUTTON debounce state machine
   switch (debounceState)
   {
-  case DEBOUNCE_STATE_IDLE:
-    // No valid switch press
-    switchStatus = SWITCH_NONE;
-    // If switch #1 is pressed
-		#ifdef	USE_MAX6675
-			if (digitalRead(switch1Pin) == LOW)
-		#else
-			if (analogRead(switchPin) == 0)
-		#endif
-			{
-				// Intialize debounce counter
-				lastDebounceTime = millis();
-				// Proceed to check validity of button press
-				debounceState = DEBOUNCE_STATE_CHECK;
-			}	
-    break;
+    case DEBOUNCE_STATE_IDLE:
+      // No valid BUTTON press
+      buttonStatus = BUTTON_NONE;
+      // If BUTTON #1 is pressed
+      if (analogRead(buttonPin) == 0)
+      {
+        // Intialize debounce counter
+        lastDebounceTime = millis();
+        // Proceed to check validity of button press
+        debounceState = DEBOUNCE_STATE_CHECK;
+      } 
+      break;
 
-  case DEBOUNCE_STATE_CHECK:
-		#ifdef	USE_MAX6675
-			// If switch #1 is still pressed
-			if (digitalRead(switch1Pin) == LOW)
-		#else
-			if (analogRead(switchPin) == 0)
-		#endif
-			{
-				// If minimum debounce period is completed
-				if ((millis() - lastDebounceTime) > DEBOUNCE_PERIOD_MIN)
-				{
-					// Proceed to wait for button release
-					debounceState = DEBOUNCE_STATE_RELEASE;
-				}
-			}
-			// False trigger
-			else
-			{
-				// Reinitialize button debounce state machine
-				debounceState = DEBOUNCE_STATE_IDLE; 
-			}
-    break;
+    case DEBOUNCE_STATE_CHECK:
+      if (analogRead(buttonPin) == 0)
+      {
+        // If minimum debounce period is completed
+        if ((millis() - lastDebounceTime) > DEBOUNCE_PERIOD_MIN)
+        {
+          // Proceed to wait for button release
+          debounceState = DEBOUNCE_STATE_RELEASE;
+        }
+      }
+      // False trigger
+      else
+      {
+        // Reinitialize button debounce state machine
+        debounceState = DEBOUNCE_STATE_IDLE; 
+      }
+      break;
 
-  case DEBOUNCE_STATE_RELEASE:
-		#ifdef	USE_MAX6675	
-			if (digitalRead(switch1Pin) == HIGH)
-    #else
-			if (analogRead(switchPin) > 0)
-		#endif
-		{
-      // Valid switch 1 press
-      switchStatus = SWITCH_1;
-      // Reinitialize button debounce state machine
-      debounceState = DEBOUNCE_STATE_IDLE; 
-    }
-    break;
+    case DEBOUNCE_STATE_RELEASE:
+      if (analogRead(buttonPin) > 0)
+      {
+        // Valid BUTTON 1 press
+        buttonStatus = BUTTON_1;
+        // Reinitialize button debounce state machine
+        debounceState = DEBOUNCE_STATE_IDLE; 
+      }
+      break;
   }
 
-  // PID computation and SSR control
-  if (reflowStatus == REFLOW_STATUS_ON)
+  // make sure ssr is low
+  if (ovenStatus == OVEN_OFF)
   {
-    now = millis();
-
-    reflowOvenPID.Compute();
-
-    if((now - windowStartTime) > windowSize)
-    { 
-      // Time to shift the Relay Window
-      windowStartTime += windowSize;
-    }
-    if(output > (now - windowStartTime)) digitalWrite(ssrPin, HIGH);
-    else digitalWrite(ssrPin, LOW);   
+    digitalWrite(ssrPin, LOW);   
   }
-  // Reflow oven process is off, ensure oven is off
-  else 
-  {
-    digitalWrite(ssrPin, LOW);
-  }
-}
+
+}  // end loop
+
