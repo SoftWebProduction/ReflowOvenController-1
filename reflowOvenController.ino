@@ -13,7 +13,7 @@
 * library for Arduino if you are having a shield of v1.68.
 *
 * Temperature (Degree Celcius)                   Magic Happens Here!
-* 245-|                                                   
+* 250-|                                                   
 *     |                         Liquidus + 20°C   x|x x x x x x x|x
 *     |                                          x |             |  x
 *     |                                         x  |             |    x
